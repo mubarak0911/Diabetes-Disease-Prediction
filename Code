@@ -1,0 +1,205 @@
+import numpy as np
+import pandas as pd 
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pickle
+
+%matplotlib inline
+
+## Models
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+
+# Feature selection
+from sklearn.feature_selection import SelectFromModel
+
+## Model evaluators
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import RandomizedSearchCV, GridSearchCV
+from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import plot_roc_curve
+
+df = pd.read_csv("data/diabetes.csv") # 'df' is short for 'DataFrame'
+
+df.head()
+
+df['class'] = df['class'] ==  'Positive'
+
+df['class'].value_counts()
+
+df['Gender'] = df['Gender'] ==  'Male'
+
+yesorno = {'Yes': True, 'No': False}
+
+df = df.replace(yesorno)
+
+df.head()
+
+df.to_csv('data/diabetes_clean.csv')
+
+# Confusion Matrix
+corr_matrix = df.corr()
+plt.figure(figsize=(15, 10))
+sns.heatmap(corr_matrix, 
+            annot=True, 
+            linewidths=0.5, 
+            fmt= ".2f", 
+            cmap="YlGnBu");
+
+# Everything except target variable
+X = df.drop("class", axis=1)
+# Target variable
+y = df['class'].values
+#Prune features using decision tree
+clf = DecisionTreeClassifier()
+clf.fit(X, y)
+
+pickle.dump(clf, open('decision_tree.pkl', 'wb'))
+# Use the fitted model to generate a graph of feature importance
+pd.Series(clf.feature_importances_, index=df.columns[:len(df.columns)-1]).sort_values(ascending=False).plot.bar(color='steelblue', figsize=(12, 6))
+
+from sklearn.feature_selection import RFECV
+
+clf = DecisionTreeClassifier()
+trans = RFECV(clf)
+X_trans = trans.fit_transform(X, y)
+columns_retained_RFECV = df.iloc[:, :-1].columns[trans.get_support()].values
+columns_retained_RFECV
+
+X_trans
+
+# Random seed for reproducibility
+np.random.seed(42)
+# Split into train & test set
+X_train, X_test, y_train, y_test = train_test_split(X_trans, # independent variables 
+                                                    y, # dependent variable
+                                                    test_size = 0.2) # percentage of data to use for test set
+# Put models in a dictionary
+models = {"KNN": KNeighborsClassifier(),
+          "Logistic Regression": LogisticRegression(max_iter=1000), 
+          "Random Forest": RandomForestClassifier()}
+# define method to fit multiple models
+def multi_fit(models, X_train, y_train):
+    # Random seed for reproducible results
+    np.random.seed(42)
+    # Loop through models
+    for name, model in models.items():
+        # Fit the model to the data
+        model.fit(X_train, y_train)
+# fit all 3 models
+model_metrics = multi_fit(models=models,
+                          X_train=X_train,
+                          y_train=y_train)
+# Create function to generate cross validated metrics for multiple models
+def cross_validated_metrics(models, X,  y):
+    
+    # Random seed for reproducible results
+    np.random.seed(42)
+    # Make a list to keep model scores totals
+    model_scores = {}
+    # Loop through models
+    for name, model in models.items():
+        # make a list to hold collected scores for each model
+        collected_scores = {}
+        # gather mean of cross validated score for a variety of metrics
+        for metric in ['accuracy', 'precision', 'recall']:
+            collected_scores[metric] = np.mean(cross_val_score(model,
+                                                               X,
+                                                               y,
+                                                               cv=5, # 5-fold cross-validation
+                                                               scoring=metric)) # loop through scoring methods
+        model_scores[name] = collected_scores
+    return model_scores
+model_metrics = cross_validated_metrics(models=models,
+                                       X=X_trans,
+                                       y=y)
+model_metrics
+
+# Fit model and get baseline score
+np.random.seed(42)
+rf = RandomForestClassifier()
+rf.fit(X_train, y_train)
+
+# cross validated accuracy score for random forest
+cv_acc_rf = np.mean(cross_val_score(rf,
+                                       X_trans,
+                                       y,
+                                       cv=5, # 5-fold cross-validation
+                                       scoring="accuracy")) # precision as scoring
+cv_acc_rf
+
+compare_metrics = pd.DataFrame(model_metrics)
+compare_metrics.plot.bar(figsize=(10, 10)).legend(bbox_to_anchor=(1,1));
+
+df_new = pd.read_csv("data/diabetes_clean_pruned.csv") # 'df' is short for 'DataFrame'
+df_new.head()
+
+# Fit model and get baseline score
+rf = RandomForestClassifier()
+np.random.seed(42)
+rf.fit(X_train, y_train)
+
+# Number of trees in random forest
+n_estimators = [int(x) for x in np.linspace(start = 200, stop = 2000, num = 10)]
+# Number of features to consider at every split
+max_features = ['auto', 'sqrt']
+# Maximum number of levels in tree
+max_depth = [int(x) for x in np.linspace(10, 110, num = 11)]
+max_depth.append(None)
+# Minimum number of samples required to split a node
+min_samples_split = [2, 5, 10]
+# Minimum number of samples required at each leaf node
+min_samples_leaf = [1, 2, 4]
+# Method of selecting samples for training each tree
+bootstrap = [True, False]# Create the random grid
+random_grid = {'n_estimators': n_estimators,
+               'max_features': max_features,
+               'max_depth': max_depth,
+               'min_samples_split': min_samples_split,
+               'min_samples_leaf': min_samples_leaf,
+               'bootstrap': bootstrap}
+random_grid
+
+# Use the random grid to search for best hyperparameters
+# First create the base model to tune
+
+# Random search of parameters, using 3 fold cross validation, 
+# search across 100 different combinations, and use all available cores
+rf_random = RandomizedSearchCV(estimator = RandomForestClassifier(), 
+                               param_distributions = random_grid, 
+                               n_iter = 1, cv = 3, 
+                               verbose=2, 
+                               random_state=42, 
+                               n_jobs = -1)
+# Fit the random search model
+# rf_random.fit(X_train, y_train)
+
+# Use the random grid to search for best hyperparameters
+# First create the base model to tune
+
+# Random search of parameters, using 3 fold cross validation, 
+# search across 100 different combinations, and use all available cores
+rf_random = RandomizedSearchCV(estimator = RandomForestClassifier(), 
+                               param_distributions = random_grid, 
+                               n_iter = 1, cv = 3, 
+                               verbose=2, 
+                               random_state=42, 
+                               n_jobs = -1)
+# Fit the random search model
+# rf_random.fit(X_train, y_train)
+# best = rf_random.best_params_
+best
+rf_random.score(X_test, y_test)
+newmodels = {"Logistic Regression": models["Logistic Regression"],
+             "Random Forest": models["Random Forest"], 
+            "RS trained RF" : rf_random}
+model_metrics = cross_validated_metrics(models=newmodels,
+                                       X=X_trans,
+                                       y=y)
+model_metrics
+compare_new_metrics = pd.DataFrame(model_metrics)
+compare_new_metrics.plot.bar(figsize=(10, 10)).legend(bbox_to_anchor=(1,1));
+
